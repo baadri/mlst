@@ -31,6 +31,8 @@ class FlightSearch(StatesGroup):
     waiting_for_depart_date = State()  # Ожидание ввода даты вылета туда
     asking_return_flight = State()  # Спрашиваем, нужен ли обратный рейс
     waiting_for_return_date = State()  # Ожидание ввода даты возвращения
+    waiting_for_adults = State() # Ожидание ввода количества взрослых
+    waiting_for_children = State() # Ожидание ввода количества детей
     waiting_for_class = State() # Ожидание выбора класса
     waiting_for_flight_type = State() # Ожидание выбора типа рейса (прямой/с пересадками)
 
@@ -84,7 +86,7 @@ async def process_depart_date(message: types.Message, state: FSMContext):
     await state.set_state(FlightSearch.asking_return_flight)
     await message.answer(f"Дата вылета: {message.text}\nНужен ли обратный рейс?", reply_markup=markup)
 
-# Обработчик ответа на вопрос о необходимости обратного рейса
+# Обновляем обработчик ввода даты отправления или выбора обратного рейса
 @dp.message(FlightSearch.asking_return_flight)
 async def process_return_flight(message: types.Message, state: FSMContext):
     user_response = message.text.lower()
@@ -93,33 +95,80 @@ async def process_return_flight(message: types.Message, state: FSMContext):
         await state.set_state(FlightSearch.waiting_for_return_date)
         await message.answer("Укажите дату обратного рейса в формате ДД.ММ.ГГГГ:")
     else:
-        # Если обратный рейс не нужен, сразу переходим к выбору класса
+        # Если обратный рейс не нужен, записываем это в состояние
         await state.update_data(return_date=None)
         
-        # Создаем клавиатуру для выбора класса
+        # Переходим к выбору количества взрослых пассажиров
+        # Создаем клавиатуру с кнопками от 1 до 6
         markup = types.ReplyKeyboardMarkup(keyboard=[
-            [types.KeyboardButton(text="Эконом")], 
-            [types.KeyboardButton(text="Комфорт")], 
-            [types.KeyboardButton(text="Бизнес")]
+            [types.KeyboardButton(text="1"), types.KeyboardButton(text="2")],
+            [types.KeyboardButton(text="3"), types.KeyboardButton(text="4")],
+            [types.KeyboardButton(text="5"), types.KeyboardButton(text="6")]
         ], resize_keyboard=True)
         
-        await state.set_state(FlightSearch.waiting_for_class)
-        await message.answer("Выберите класс обслуживания:", reply_markup=markup)
+        await state.set_state(FlightSearch.waiting_for_adults)
+        await message.answer("Укажите количество взрослых пассажиров (от 1 до 6):", reply_markup=markup)
 
-# Обработчик ввода даты возвращения
+# Обновляем обработчик ввода даты возвращения
 @dp.message(FlightSearch.waiting_for_return_date)
 async def process_return_date(message: types.Message, state: FSMContext):
     await state.update_data(return_date=message.text)
     
-    # Создаем клавиатуру для выбора класса
+    # Создаем клавиатуру с кнопками от 1 до 6
     markup = types.ReplyKeyboardMarkup(keyboard=[
-        [types.KeyboardButton(text="Эконом")], 
-        [types.KeyboardButton(text="Комфорт")], 
-        [types.KeyboardButton(text="Бизнес")]
+        [types.KeyboardButton(text="1"), types.KeyboardButton(text="2")],
+        [types.KeyboardButton(text="3"), types.KeyboardButton(text="4")],
+        [types.KeyboardButton(text="5"), types.KeyboardButton(text="6")]
     ], resize_keyboard=True)
     
-    await state.set_state(FlightSearch.waiting_for_class)
-    await message.answer(f"Дата возвращения: {message.text}\nВыберите класс обслуживания:", reply_markup=markup)
+    await state.set_state(FlightSearch.waiting_for_adults)
+    await message.answer(f"Дата возвращения: {message.text}\nУкажите количество взрослых пассажиров (от 1 до 6):", reply_markup=markup)
+    
+    # Добавляем обработчик выбора количества взрослых
+@dp.message(FlightSearch.waiting_for_adults)
+async def process_adults(message: types.Message, state: FSMContext):
+    # Проверяем, что введено число от 1 до 6
+    try:
+        adults_count = int(message.text)
+        if 1 <= adults_count <= 6:
+            await state.update_data(adults_count=adults_count)
+            
+            # Создаем клавиатуру с кнопками от 0 до 4
+            markup = types.ReplyKeyboardMarkup(keyboard=[
+                [types.KeyboardButton(text="0"), types.KeyboardButton(text="1")],
+                [types.KeyboardButton(text="2"), types.KeyboardButton(text="3")],
+                [types.KeyboardButton(text="4")]
+            ], resize_keyboard=True)
+            
+            await state.set_state(FlightSearch.waiting_for_children)
+            await message.answer(f"Количество взрослых: {adults_count}\nУкажите количество детей (от 0 до 4):", reply_markup=markup)
+        else:
+            await message.answer("Пожалуйста, введите число от 1 до 6.")
+    except ValueError:
+        await message.answer("Пожалуйста, введите корректное число от 1 до 6.")
+        
+# Добавляем обработчик выбора количества детей
+@dp.message(FlightSearch.waiting_for_children)
+async def process_children(message: types.Message, state: FSMContext):
+    # Проверяем, что введено число от 0 до 4
+    try:
+        children_count = int(message.text)
+        if 0 <= children_count <= 4:
+            await state.update_data(children_count=children_count)
+            
+            # Создаем клавиатуру для выбора класса
+            markup = types.ReplyKeyboardMarkup(keyboard=[
+                [types.KeyboardButton(text="Эконом")], 
+                [types.KeyboardButton(text="Комфорт")], 
+                [types.KeyboardButton(text="Бизнес")]
+            ], resize_keyboard=True)
+            
+            await state.set_state(FlightSearch.waiting_for_class)
+            await message.answer(f"Количество детей: {children_count}\nВыберите класс обслуживания:", reply_markup=markup)
+        else:
+            await message.answer("Пожалуйста, введите число от 0 до 4.")
+    except ValueError:
+        await message.answer("Пожалуйста, введите корректное число от 0 до 4.")
 
 # Обработчик выбора класса
 @dp.message(FlightSearch.waiting_for_class)
@@ -136,12 +185,12 @@ async def process_class(message: types.Message, state: FSMContext):
     await state.set_state(FlightSearch.waiting_for_flight_type)
     await message.answer("Какие рейсы вас интересуют?", reply_markup=markup)
     
-    # Добавляем обработчик выбора типа рейса
+# Обновляем обработчик выбора типа рейса, добавляя информацию о пассажирах в вывод
 @dp.message(FlightSearch.waiting_for_flight_type)
 async def process_flight_type(message: types.Message, state: FSMContext):
     flight_type = message.text
     
-        # Перевод выбора пользователя в значение для фильтра
+    # Перевод выбора пользователя в значение для фильтра
     flight_filter = "all"  # По умолчанию - все рейсы
     if flight_type == "Только прямые рейсы":
         flight_filter = "direct"
@@ -157,6 +206,7 @@ async def process_flight_type(message: types.Message, state: FSMContext):
     # Удаляем клавиатуру
     markup = types.ReplyKeyboardRemove()
       
+    # Формируем сообщение с параметрами поиска, добавляя информацию о пассажирах
     search_params = (
         f"🔍 Параметры поиска:\n"
         f"✈️ Откуда: {user_data['from_city']}\n"
@@ -168,6 +218,12 @@ async def process_flight_type(message: types.Message, state: FSMContext):
         search_params += f"🔄 Дата возвращения: {user_data['return_date']}\n"
     else:
         search_params += "🔄 Без обратного рейса\n"
+    
+    # Добавляем информацию о пассажирах
+    search_params += f"👨‍👩‍👧‍👦 Пассажиры: {user_data.get('adults_count', 1)} взр."
+    if user_data.get('children_count', 0) > 0:
+        search_params += f" + {user_data.get('children_count')} дет."
+    search_params += "\n"
         
     search_params += f"🛋 Класс: {user_data.get('class_type', '—')}\n"
     
@@ -195,14 +251,16 @@ async def process_flight_type(message: types.Message, state: FSMContext):
             # Если не удаётся обновить, отправляем новое
             status_info[0] = await message.answer(text)
     
-    # Запускаем поиск билетов
+  # Запускаем поиск билетов с добавленными параметрами
     search_result = await search_flights(
         from_city=user_data['from_city'],
         to_city=user_data['to_city'],
         depart_date=user_data['depart_date'],
         return_date=user_data.get('return_date'),
+        adults_count=user_data.get('adults_count', 1),  # Добавляем параметр количества взрослых
+        children_count=user_data.get('children_count', 0),  # Добавляем параметр количества детей
         class_type=user_data.get('class_type', 'эконом'),
-        flight_filter=user_data.get('flight_filter', 'all'),  # Добавляем параметр фильтрации
+        flight_filter=user_data.get('flight_filter', 'all'),
         status_callback=update_status
     )
     
@@ -262,7 +320,7 @@ def format_flight_info(flight, direction):
         return f"<b>Рейс {direction} #{flight.get('id', '')}</b>\nНет информации о сегментах"
     
     # Информация о количестве мест
-    seats_info = f"Доступно мест: {flight.get('seats_available', '—')}"
+    seats_info = f"Доступно билетов за мили: {flight.get('seats_available', '—')}"
     
     # Информация о первом сегменте (откуда и куда, время)
     first_segment = segments[0]

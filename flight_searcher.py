@@ -34,8 +34,10 @@ async def search_flights(
     to_city, 
     depart_date, 
     return_date=None, 
+    adults_count=1,  # Добавляем параметр количества взрослых
+    children_count=0,  # Добавляем параметр количества детей
     class_type="economy", 
-    flight_filter="all",  # Добавляем параметр фильтрации
+    flight_filter="all",
     status_callback=None
 ):
     """
@@ -72,8 +74,12 @@ async def search_flights(
     # определяем класс обслуживания
     service_class = CLASS_MAP.get(class_type.lower(), "economy")
     
-    # формируем URL для поиска
-    url = f'https://www.aeroflot.ru/sb/app/ru-ru#/search?adults=1&award=Y&cabin={service_class}&children=0&childrenaward=0&childrenfrgn=0&infants=0'
+    # Проверяем и ограничиваем количество пассажиров
+    adults_count = max(1, min(6, int(adults_count)))  # от 1 до 6, убеждаемся что это число
+    children_count = max(0, min(4, int(children_count)))  # от 0 до 4, убеждаемся что это число
+    
+    # формируем URL для поиска, явно указывая количество пассажиров
+    url = f'https://www.aeroflot.ru/sb/app/ru-ru#/search?adults={adults_count}&children={children_count}&childrenaward={children_count}&&award=Y&cabin={service_class}&infants=0'
     
     if return_date:
         url += f'&routes={from_code}.{formatted_depart_date}.{to_code}-{to_code}.{formatted_return_date}.{from_code}'
