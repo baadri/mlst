@@ -187,6 +187,8 @@ async def process_class(message: types.Message, state: FSMContext):
     
 # Исправляем обработчик выбора типа рейса
 @dp.message(FlightSearch.waiting_for_flight_type)
+# Обновляем обработчик выбора типа рейса
+@dp.message(FlightSearch.waiting_for_flight_type)
 async def process_flight_type(message: types.Message, state: FSMContext):
     flight_type = message.text
     
@@ -202,6 +204,9 @@ async def process_flight_type(message: types.Message, state: FSMContext):
     # Получаем все данные из состояния
     user_data = await state.get_data()
     await state.clear()
+    
+    # Запускаем поиск с собранными данными
+    await process_search_with_data(message, state, user_data)
     
     # Удаляем клавиатуру
     markup = types.ReplyKeyboardRemove()
@@ -265,28 +270,39 @@ async def process_flight_type(message: types.Message, state: FSMContext):
     )
     
     # Проверяем, есть ли ошибка в результате
-    if "error" in search_result:
-        # Специальная обработка для отсутствия рейсов
-        if search_result.get("error") == "no_flights_available":
-            error_message = "❗️ На выбранные даты рейсы не найдены."
-            
-            # Добавляем рекомендации
-            if "suggestions" in search_result:
-                error_message += "\n\n<b>Рекомендации:</b>"
-                for suggestion in search_result["suggestions"]:
-                    error_message += f"\n• {suggestion}"
-                    
-            # Добавляем кнопку для нового поиска
-            markup = types.InlineKeyboardMarkup(inline_keyboard=[
-                [types.InlineKeyboardButton(text="🔄 Новый поиск", callback_data="new_search")]
-            ])
-            
-            await message.answer(error_message, reply_markup=markup, parse_mode="HTML")
-            return
-        else:
-            # Стандартная обработка других ошибок
-            await message.answer(f"❌ Ошибка при поиске: {search_result['error']}")
-            return
+if "error" in search_result:
+    # Обработка разных типов ошибок
+    error_type = search_result.get("error")
+    
+    if error_type in ["no_flights_available", "no_direct_flights", "no_connection_flights"]:
+        error_message = f"❗️ {search_result.get('message', 'На выбранные даты рейсы не найдены.')}."
+        
+        # Добавляем рекомендации
+        if "suggestions" in search_result:
+            error_message += "\n\n<b>Рекомендации:</b>"
+            for suggestion in search_result["suggestions"]:
+                error_message += f"\n• {suggestion}"
+                
+        # Добавляем кнопки для нового поиска и изменения типа рейса
+        inline_buttons = []
+        
+        # Кнопка для нового поиска
+        inline_buttons.append([types.InlineKeyboardButton(text="🔄 Новый поиск", callback_data="new_search")])
+        
+        # Добавляем кнопки для переключения типа рейса, если это связано с отсутствием определенного типа рейсов
+        if error_type == "no_direct_flights":
+            inline_buttons.append([types.InlineKeyboardButton(text="👁 Показать рейсы с пересадками", callback_data="show_connections")])
+        elif error_type == "no_connection_flights":
+            inline_buttons.append([types.InlineKeyboardButton(text="👁 Показать прямые рейсы", callback_data="show_direct")])
+        
+        markup = types.InlineKeyboardMarkup(inline_keyboard=inline_buttons)
+        
+        await message.answer(error_message, reply_markup=markup, parse_mode="HTML")
+        return
+    else:
+        # Стандартная обработка других ошибок
+        await message.answer(f"❌ Ошибка при поиске: {search_result['error']}")
+        return
     
     # Обрабатываем результаты поиска
     there_flights = search_result.get("there", [])
@@ -407,6 +423,174 @@ async def process_new_search(callback_query: types.CallbackQuery, state: FSMCont
     # Начинаем новый поиск
     await state.set_state(FlightSearch.waiting_for_from)
     await callback_query.message.answer("Начинаем новый поиск! Укажите город отправления (например, Москва или MOW):")
+
+# Обработчик кнопки "Показать рейсы с пересадками"
+@dp.callback_query(lambda c: c.data == "show_connections")
+async def process_show_connections(callback_query: types.CallbackQuery, state: FSMContext):
+    await callback_query.answer()
+    
+    # Сохраняем предыдущие данные пользователя
+    user_data = await state.get_data()
+    
+    # Обновляем данные с новым типом рейса
+    user_data["flight_filter"] = "connections"
+    await state.set_data(user_data)
+    
+    # Запускаем поиск с новым фильтром
+    await process_search_with_data(callback_query.message, state, user_data)
+
+# Обработчик кнопки "Показать прямые рейсы"
+@dp.callback_query(lambda c: c.data == "show_direct")
+async def process_show_direct(callback_query: types.CallbackQuery, state: FSMContext):
+    await callback_query.answer()
+    
+    # Сохраняем предыдущие данные пользователя
+    user_data = await state.get_data()
+    
+    # Обновляем данные с новым типом рейса
+    user_data["flight_filter"] = "direct"
+    await state.set_data(user_data)
+    
+    # Запускаем поиск с новым фильтром
+    await process_search_with_data(callback_query.message, state, user_data)
+
+# Функция для запуска поиска с заданными параметрами
+async def process_search_with_data(message, state, user_data):
+    # Удаляем клавиатуру
+    markup = types.ReplyKeyboardRemove()
+    
+    # Формируем сообщение с параметрами поиска
+    search_params = (
+        f"🔍 Параметры поиска:\n"
+        f"✈️ Откуда: {user_data['from_city']}\n"
+        f"🛬 Куда: {user_data['to_city']}\n"
+        f"📅 Дата вылета: {user_data['depart_date']}\n"
+    )
+    
+    if user_data.get('return_date'):
+        search_params += f"🔄 Дата возвращения: {user_data['return_date']}\n"
+    else:
+        search_params += "🔄 Без обратного рейса\n"
+    
+    # Добавляем информацию о пассажирах
+    search_params += f"👨‍👩‍👧‍👦 Пассажиры: {user_data.get('adults_count', 1)} взр."
+    if user_data.get('children_count', 0) > 0:
+        search_params += f" + {user_data.get('children_count')} дет."
+    search_params += "\n"
+        
+    search_params += f"🛋 Класс: {user_data.get('class_type', '—')}\n"
+    
+    # Добавляем информацию о типе рейса
+    filter_text = "Все типы рейсов"
+    if user_data.get('flight_filter') == "direct":
+        filter_text = "Только прямые рейсы"
+    elif user_data.get('flight_filter') == "connections":
+        filter_text = "Только рейсы с пересадками"
+    
+    search_params += f"🛫 Тип рейса: {filter_text}"
+    
+    search_message = await message.answer(search_params, reply_markup=markup)
+    status_message = await message.answer("🕒 Начинаю поиск билетов с новыми параметрами...")
+    
+    # Создаем список для хранения ссылки на сообщение статуса
+    status_info = [status_message]
+    
+    # Функция обратного вызова для отправки статусных сообщений
+    async def update_status(text):
+        try:
+            # Обновляем существующее сообщение статуса
+            await status_info[0].edit_text(text)
+        except Exception:
+            # Если не удаётся обновить, отправляем новое
+            status_info[0] = await message.answer(text)
+    
+    # Запускаем поиск билетов с добавленными параметрами
+    search_result = await search_flights(
+        from_city=user_data['from_city'],
+        to_city=user_data['to_city'],
+        depart_date=user_data['depart_date'],
+        return_date=user_data.get('return_date'),
+        adults_count=user_data.get('adults_count', 1),
+        children_count=user_data.get('children_count', 0),
+        class_type=user_data.get('class_type', 'эконом'),
+        flight_filter=user_data.get('flight_filter', 'all'),
+        status_callback=update_status
+    )
+    
+    # Используем существующую логику для обработки результатов
+    await process_search_results(message, state, search_result)
+
+# Выносим обработку результатов поиска в отдельную функцию для переиспользования
+async def process_search_results(message, state, search_result):
+    # Проверяем, есть ли ошибка в результате
+    if "error" in search_result:
+        # Обработка разных типов ошибок
+        error_type = search_result.get("error")
+        
+        if error_type in ["no_flights_available", "no_direct_flights", "no_connection_flights"]:
+            error_message = f"❗️ {search_result.get('message', 'На выбранные даты рейсы не найдены.')}."
+            
+            # Добавляем рекомендации
+            if "suggestions" in search_result:
+                error_message += "\n\n<b>Рекомендации:</b>"
+                for suggestion in search_result["suggestions"]:
+                    error_message += f"\n• {suggestion}"
+                    
+            # Добавляем кнопки для нового поиска и изменения типа рейса
+            inline_buttons = []
+            
+            # Кнопка для нового поиска
+            inline_buttons.append([types.InlineKeyboardButton(text="🔄 Новый поиск", callback_data="new_search")])
+            
+            # Добавляем кнопки для переключения типа рейса, если это связано с отсутствием определенного типа рейсов
+            if error_type == "no_direct_flights":
+                inline_buttons.append([types.InlineKeyboardButton(text="👁 Показать рейсы с пересадками", callback_data="show_connections")])
+            elif error_type == "no_connection_flights":
+                inline_buttons.append([types.InlineKeyboardButton(text="👁 Показать прямые рейсы", callback_data="show_direct")])
+            
+            markup = types.InlineKeyboardMarkup(inline_keyboard=inline_buttons)
+            
+            await message.answer(error_message, reply_markup=markup, parse_mode="HTML")
+            return
+        else:
+            # Стандартная обработка других ошибок
+            await message.answer(f"❌ Ошибка при поиске: {search_result['error']}")
+            return
+    
+    # Обрабатываем результаты поиска
+    there_flights = search_result.get("there", [])
+    back_flights = search_result.get("back", [])
+    
+    if not there_flights and not back_flights:
+        await message.answer("❌ К сожалению, ничего не найдено. Попробуйте изменить параметры поиска.")
+        
+        # Добавляем кнопку для нового поиска
+        markup = types.InlineKeyboardMarkup(inline_keyboard=[
+            [types.InlineKeyboardButton(text="🔄 Новый поиск", callback_data="new_search")]
+        ])
+        
+        await message.answer("Хотите начать новый поиск?", reply_markup=markup)
+        return
+            
+    # Отправляем краткую информацию о найденных рейсах
+    if there_flights:
+        await message.answer(f"✅ Найдено {len(there_flights)} рейсов туда")
+        
+        # Отправляем информацию о каждом рейсе туда
+        for flight in there_flights:
+            flight_info = format_flight_info(flight, "туда")
+            await message.answer(flight_info, parse_mode="HTML")
+    
+    if back_flights:
+        await message.answer(f"✅ Найдено {len(back_flights)} рейсов обратно")
+        
+        # Отправляем информацию о каждом рейсе обратно
+        for flight in back_flights:
+            flight_info = format_flight_info(flight, "обратно")
+            await message.answer(flight_info, parse_mode="HTML")
+    
+    # Отправляем сообщение, что поиск завершен
+    await message.answer("✅ Поиск завершен! Используйте /search для нового поиска.")
     
 # Запуск бота
 async def main():
