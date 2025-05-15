@@ -35,6 +35,7 @@ async def search_flights(
     depart_date, 
     return_date=None, 
     class_type="economy", 
+    flight_filter="all",  # Добавляем параметр фильтрации
     status_callback=None
 ):
     """
@@ -98,7 +99,7 @@ async def search_flights(
         
         driver.get(url)
         
-        # ожидание загрузки страницы и появления кнопки "найти"
+        # Ожидание загрузки страницы и появления кнопки "найти"
         wait = WebDriverWait(driver, 5)
         try:
             if status_callback:
@@ -113,7 +114,7 @@ async def search_flights(
                 await status_callback("⚠️ кнопка 'найти' не найдена или не кликабельна")
             return {"error": "Search button not found"}
 
-        # ожидание результатов поиска
+        # Ожидание результатов поиска
         try:
             if status_callback:
                 await status_callback("⏳ ожидаю результаты поиска...")
@@ -121,12 +122,73 @@ async def search_flights(
             wait.until(
                 EC.presence_of_element_located((By.XPATH, "//div[contains(@class,'flight-search__inner')]"))
             )
-            # добавляем еще немного времени на полную загрузку
+            # Добавляем еще немного времени на полную загрузку
             await asyncio.sleep(3)
         except TimeoutException:
             if status_callback:
                 await status_callback("⚠️ Timeout: результаты поиска не загрузились за отведенное время")
             return {"error": "Search results timeout"}
+        
+        # Добавляем логику применения фильтра по типу рейса
+        if flight_filter != "all":
+            if status_callback:
+                await status_callback("🔍 применяю фильтр по типу рейса...")
+            
+            try:
+                # Ждем появления фильтров
+                wait.until(
+                    EC.presence_of_element_located((By.XPATH, "//div[contains(@class,'filter__title')]"))
+                )
+                
+                # Проверяем, нужно ли раскрыть аккордеон с экспресс-фильтрами
+                accordion_item = driver.find_elements(By.XPATH, "//div[@role='tab' and contains(@class,'accordion__item') and .//span[contains(text(),'Экспресс-фильтры')]]")
+                if accordion_item:
+                    if not "accordion__item--open" in accordion_item[0].get_attribute("class"):
+                        # Если аккордеон закрыт, кликаем по нему чтобы открыть
+                        accordion_button = accordion_item[0].find_element(By.XPATH, ".//button[contains(@class,'accordion__heading')]")
+                        driver.execute_script("arguments[0].click();", accordion_button)
+                        await asyncio.sleep(1)
+                
+                # Находим чекбокс "Прямой рейс"
+                direct_checkbox_label = wait.until(
+                    EC.presence_of_element_located((By.XPATH, "//label[contains(text(),'Прямой рейс')]"))
+                )
+                direct_checkbox_id = direct_checkbox_label.get_attribute("for")
+                direct_checkbox = driver.find_element(By.ID, direct_checkbox_id)
+                
+                # Находим чекбокс "1" (с одной пересадкой)
+                connection_checkbox_label = driver.find_element(By.XPATH, "//label[text()='1']")
+                connection_checkbox_id = connection_checkbox_label.get_attribute("for")
+                connection_checkbox = driver.find_element(By.ID, connection_checkbox_id)
+                
+                # Применяем соответствующий фильтр
+                if flight_filter == "direct":
+                    # Включаем только прямые рейсы
+                    if not direct_checkbox.is_selected():
+                        driver.execute_script("arguments[0].click();", direct_checkbox)
+                    
+                    # Убеждаемся, что рейсы с пересадками выключены
+                    if connection_checkbox.is_selected():
+                        driver.execute_script("arguments[0].click();", connection_checkbox)
+                        
+                elif flight_filter == "connections":
+                    # Включаем только рейсы с пересадками
+                    if not connection_checkbox.is_selected():
+                        driver.execute_script("arguments[0].click();", connection_checkbox)
+                    
+                    # Убеждаемся, что прямые рейсы выключены
+                    if direct_checkbox.is_selected():
+                        driver.execute_script("arguments[0].click();", direct_checkbox)
+                
+                # Даем время на применение фильтра
+                await asyncio.sleep(2)
+                
+                if status_callback:
+                    await status_callback("✅ фильтр по типу рейса применен")
+                    
+            except (NoSuchElementException, TimeoutException) as e:
+                if status_callback:
+                    await status_callback(f"⚠️ не удалось применить фильтр по типу рейса: {str(e)}")
         
         if status_callback:
             await status_callback("✅ результаты поиска получены, обрабатываю данные...")
