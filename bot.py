@@ -266,16 +266,51 @@ async def process_flight_type(message: types.Message, state: FSMContext):
     
     # Проверяем, есть ли ошибка в результате
     if "error" in search_result:
-        await message.answer(f"❌ Ошибка при поиске: {search_result['error']}")
-        return
+        # Специальная обработка для отсутствия рейсов
+        if search_result.get("error") == "no_flights_available":
+            error_message = "❗️ На выбранные даты рейсы не найдены."
+            
+            # Добавляем рекомендации
+            if "suggestions" in search_result:
+                error_message += "\n\n<b>Рекомендации:</b>"
+                for suggestion in search_result["suggestions"]:
+                    error_message += f"\n• {suggestion}"
+                    
+            # Добавляем кнопку для нового поиска
+            markup = types.InlineKeyboardMarkup(inline_keyboard=[
+                [types.InlineKeyboardButton(text="🔄 Новый поиск", callback_data="new_search")]
+            ])
+            
+            await message.answer(error_message, reply_markup=markup, parse_mode="HTML")
+            return
+        else:
+            # Стандартная обработка других ошибок
+            await message.answer(f"❌ Ошибка при поиске: {search_result['error']}")
+            return
+            
+            
+    # Добавляем обработчик для кнопки нового поиска
+@dp.callback_query(lambda c: c.data == "new_search")
+async def process_new_search(callback_query: types.CallbackQuery, state: FSMContext):
+    # Сначала отправляем ответ на callback
+    await callback_query.answer()
+    
+    # Начинаем новый поиск
+    await state.set_state(FlightSearch.waiting_for_from)
+    await callback_query.message.answer("Начинаем новый поиск! Укажите город отправления (например, Москва или MOW):")
     
     # Обрабатываем результаты поиска
     there_flights = search_result.get("there", [])
     back_flights = search_result.get("back", [])
     
+    
     if not there_flights and not back_flights:
         await message.answer("❌ К сожалению, ничего не найдено. Попробуйте изменить параметры поиска.")
         return
+        
+    # Попробуем показать любую доступную информацию о поиске
+    await message.answer(f"📊 Отладочная информация:\n```\n{str(search_result)}\n```", parse_mode="Markdown")
+    return
             
     # Отправляем краткую информацию о найденных рейсах
     if there_flights:
@@ -369,7 +404,19 @@ def format_flight_info(flight, direction):
         )
     
     return route_info
+    
+# Добавьте этот код в конец файла bot.py, перед функцией main()
 
+# Обработчик для кнопки нового поиска
+@dp.callback_query(lambda c: c.data == "new_search")
+async def process_new_search(callback_query: types.CallbackQuery, state: FSMContext):
+    # Сначала отправляем ответ на callback
+    await callback_query.answer()
+    
+    # Начинаем новый поиск
+    await state.set_state(FlightSearch.waiting_for_from)
+    await callback_query.message.answer("Начинаем новый поиск! Укажите город отправления (например, Москва или MOW):")
+    
 # Запуск бота
 async def main():
     await dp.start_polling(bot)
