@@ -185,7 +185,7 @@ async def process_class(message: types.Message, state: FSMContext):
     await state.set_state(FlightSearch.waiting_for_flight_type)
     await message.answer("Какие рейсы вас интересуют?", reply_markup=markup)
     
-# Обновляем обработчик выбора типа рейса, добавляя информацию о пассажирах в вывод
+# Исправляем обработчик выбора типа рейса
 @dp.message(FlightSearch.waiting_for_flight_type)
 async def process_flight_type(message: types.Message, state: FSMContext):
     flight_type = message.text
@@ -251,14 +251,14 @@ async def process_flight_type(message: types.Message, state: FSMContext):
             # Если не удаётся обновить, отправляем новое
             status_info[0] = await message.answer(text)
     
-  # Запускаем поиск билетов с добавленными параметрами
+    # Запускаем поиск билетов с добавленными параметрами
     search_result = await search_flights(
         from_city=user_data['from_city'],
         to_city=user_data['to_city'],
         depart_date=user_data['depart_date'],
         return_date=user_data.get('return_date'),
-        adults_count=user_data.get('adults_count', 1),  # Добавляем параметр количества взрослых
-        children_count=user_data.get('children_count', 0),  # Добавляем параметр количества детей
+        adults_count=user_data.get('adults_count', 1),
+        children_count=user_data.get('children_count', 0),
         class_type=user_data.get('class_type', 'эконом'),
         flight_filter=user_data.get('flight_filter', 'all'),
         status_callback=update_status
@@ -287,30 +287,21 @@ async def process_flight_type(message: types.Message, state: FSMContext):
             # Стандартная обработка других ошибок
             await message.answer(f"❌ Ошибка при поиске: {search_result['error']}")
             return
-            
-            
-    # Добавляем обработчик для кнопки нового поиска
-@dp.callback_query(lambda c: c.data == "new_search")
-async def process_new_search(callback_query: types.CallbackQuery, state: FSMContext):
-    # Сначала отправляем ответ на callback
-    await callback_query.answer()
-    
-    # Начинаем новый поиск
-    await state.set_state(FlightSearch.waiting_for_from)
-    await callback_query.message.answer("Начинаем новый поиск! Укажите город отправления (например, Москва или MOW):")
     
     # Обрабатываем результаты поиска
     there_flights = search_result.get("there", [])
     back_flights = search_result.get("back", [])
     
-    
     if not there_flights and not back_flights:
         await message.answer("❌ К сожалению, ничего не найдено. Попробуйте изменить параметры поиска.")
-        return
         
-    # Попробуем показать любую доступную информацию о поиске
-    await message.answer(f"📊 Отладочная информация:\n```\n{str(search_result)}\n```", parse_mode="Markdown")
-    return
+        # Добавляем кнопку для нового поиска
+        markup = types.InlineKeyboardMarkup(inline_keyboard=[
+            [types.InlineKeyboardButton(text="🔄 Новый поиск", callback_data="new_search")]
+        ])
+        
+        await message.answer("Хотите начать новый поиск?", reply_markup=markup)
+        return
             
     # Отправляем краткую информацию о найденных рейсах
     if there_flights:
