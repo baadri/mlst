@@ -319,3 +319,46 @@ CITY_TO_IATA = {
     "эр-рияд": "RUH",
     "южно-курильск": "DEE",
 }
+
+def find_city(query, max_results=5):
+    """
+    Поиск города по части названия или коду IATA
+    
+    Args:
+        query (str): Часть названия города или код IATA
+        max_results (int): Максимальное количество результатов
+        
+    Returns:
+        list: Список подходящих городов [(город, код), ...]
+    """
+    query = query.lower()
+    matches = []
+    
+    # Если это похоже на IATA-код (3 буквы), ищем обратное соответствие
+    if len(query) == 3 and query.isalpha():
+        query_upper = query.upper()
+        for city, code in CITY_TO_IATA.items():
+            if code == query_upper:
+                return [(city.capitalize(), code)]  # Если нашли точное совпадение, сразу возвращаем
+            elif code.startswith(query[0].upper()):
+                matches.append((city.capitalize(), code))
+                if len(matches) >= max_results:
+                    break
+    
+    # Иначе ищем совпадения по названию города
+    else:
+        for city, code in CITY_TO_IATA.items():
+            if query in city:
+                matches.append((city.capitalize(), code))
+                if len(matches) >= max_results:
+                    break
+    
+    # Если ничего не нашлось по названию, пробуем найти по первым буквам
+    if not matches and len(query) >= 2:
+        for city, code in CITY_TO_IATA.items():
+            if city.startswith(query):
+                matches.append((city.capitalize(), code))
+                if len(matches) >= max_results:
+                    break
+    
+    return matches
