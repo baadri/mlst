@@ -34,8 +34,8 @@ async def search_flights(
     to_city, 
     depart_date, 
     return_date=None, 
-    adults_count=1,  # Добавляем параметр количества взрослых
-    children_count=0,  # Добавляем параметр количества детей
+    adults_count=1,
+    children_count=0,
     class_type="economy", 
     flight_filter="all",
     status_callback=None
@@ -48,7 +48,10 @@ async def search_flights(
         to_city (str): город прибытия
         depart_date (str): дата вылета в формате дд.мм.гггг
         return_date (str, optional): дата возвращения в формате дд.мм.гггг
+        adults_count (int, optional): количество взрослых пассажиров (от 1 до 6)
+        children_count (int, optional): количество детей (от 0 до 4)
         class_type (str, optional): класс обслуживания (эконом, комфорт, бизнес)
+        flight_filter (str, optional): фильтр типа рейса ('all', 'direct', 'connections')
         status_callback (callable, optional): функция для отправки статусных сообщений
         
     Returns:
@@ -87,7 +90,7 @@ async def search_flights(
         url += f'&routes={from_code}.{formatted_depart_date}.{to_code}'
     
     if status_callback:
-        await status_callback(f"🔍 начинаю поиск билетов...\nURL: {url}")
+        await status_callback(f"🔍 начинаю поиск билетов...\n👥 Пассажиры: {adults_count} взр., {children_count} дет.\nURL: {url}")
     
     # запуск Selenium
     # Используем относительный или абсолютный путь в зависимости от ОС
@@ -120,20 +123,65 @@ async def search_flights(
                 await status_callback("⚠️ кнопка 'найти' не найдена или не кликабельна")
             return {"error": "Search button not found"}
 
-        # Ожидание результатов поиска
+        # Проверяем наличие сообщения "На выбранные даты рейсы не найдены"
         try:
-            if status_callback:
-                await status_callback("⏳ ожидаю результаты поиска...")
+            # Сначала увеличиваем время ожидания, так как страница может долго грузиться
+            wait = WebDriverWait(driver, 15)
+            
+            # Проверяем, есть ли сообщение о том, что нет рейсов
+            no_flights_message = driver.find_elements(By.XPATH, 
+                "//div[contains(@class,'text') and contains(@role,'alert') and contains(text(),'На выбранные даты рейсы не найдены')]")
+            
+            if no_flights_message:
+                if status_callback:
+                    await status_callback("ℹ️ На выбранные даты рейсы не найдены. Попробуйте изменить дату, уменьшить количество пассажиров или выбрать другой класс обслуживания.")
+                return {
+                    "error": "no_flights_available",
+                    "message": "На выбранные даты рейсы не найдены",
+                    "suggestions": [
+                        "Выберите другую дату",
+                        "Уменьшите количество пассажиров",
+                        f"Текущее количество пассажиров: {adults_count} взр., {children_count} дет.",
+                        "Попробуйте другой класс обслуживания"
+                    ]
+                }
+
+            # Ожидание результатов поиска
+            try:
+                if status_callback:
+                    await status_callback("⏳ ожидаю результаты поиска...")
                 
-            wait.until(
-                EC.presence_of_element_located((By.XPATH, "//div[contains(@class,'flight-search__inner')]"))
-            )
-            # Добавляем еще немного времени на полную загрузку
-            await asyncio.sleep(3)
-        except TimeoutException:
-            if status_callback:
-                await status_callback("⚠️ Timeout: результаты поиска не загрузились за отведенное время")
-            return {"error": "Search results timeout"}
+                wait.until(
+                    EC.presence_of_element_located((By.XPATH, "//div[contains(@class,'flight-search__inner')]"))
+                )
+                # Добавляем еще немного времени на полную загрузку
+                await asyncio.sleep(3)
+            except TimeoutException:
+                # Проверяем еще раз, не появилось ли сообщение об отсутствии рейсов
+                no_flights_message = driver.find_elements(By.XPATH, 
+                    "//div[contains(@class,'text') and contains(@role,'alert') and contains(text(),'На выбранные даты рейсы не найдены')]")
+                
+                if no_flights_message:
+                    if status_callback:
+                        await status_callback("ℹ️ На выбранные даты рейсы не найдены. Попробуйте изменить дату, уменьшить количество пассажиров или выбрать другой класс обслуживания.")
+                    return {
+                        "error": "no_flights_available",
+                        "message": "На выбранные даты рейсы не найдены",
+                        "suggestions": [
+                            "Выберите другую дату",
+                            "Уменьшите количество пассажиров",
+                            f"Текущее количество пассажиров: {adults_count} взр., {children_count} дет.",
+                            "Попробуйте другой класс обслуживания"
+                        ]
+                    }
+                        
+                if status_callback:
+                    await status_callback("⚠️ Timeout: результаты поиска не загрузились за отведенное время")
+                return {"error": "Search results timeout"}
+                
+        except Exception as e:
+            # Если произошла ошибка при проверке наличия сообщений, продолжаем обычный поиск
+            print(f"Error checking no flights message: {e}")
         
         # Добавляем логику применения фильтра по типу рейса
         if flight_filter != "all":
@@ -196,33 +244,93 @@ async def search_flights(
                 if status_callback:
                     await status_callback(f"⚠️ не удалось применить фильтр по типу рейса: {str(e)}")
         
-        if status_callback:
-            await status_callback("✅ результаты поиска получены, обрабатываю данные...")
-        
-        # найдем заголовки направлений (туда и обратно)
-        direction_frames = driver.find_elements(By.XPATH, "//div[contains(@class,'frame__heading') and contains(@class,'h-pull--left')]")
-        
-        for idx, frame in enumerate(direction_frames):
-            direction_text = frame.text
-            direction_type = "there" if idx == 0 else "back"
+        # Обработка результатов поиска
+        try:
+            if status_callback:
+                await status_callback("✅ результаты поиска получены, обрабатываю данные...")
+            
+            # найдем заголовки направлений (туда и обратно)
+            direction_frames = driver.find_elements(By.XPATH, "//div[contains(@class,'frame__heading') and contains(@class,'h-pull--left')]")
+            
+            # Если заголовки не найдены, проверяем страницу еще раз
+            if not direction_frames:
+                if status_callback:
+                    await status_callback("⚠️ не найдены заголовки направлений, проверяю страницу еще раз...")
+                
+                # Проверяем, есть ли сообщение о том, что нет рейсов
+                no_flights_message = driver.find_elements(By.XPATH, 
+                    "//div[contains(@class,'text') and @role='alert' and contains(text(),'На выбранные даты')]")
+                
+                if no_flights_message:
+                    if status_callback:
+                        await status_callback(f"ℹ️ {no_flights_message[0].text}. Попробуйте изменить дату или уменьшить количество пассажиров.")
+                    return {
+                        "error": "no_flights_available",
+                        "message": no_flights_message[0].text,
+                        "suggestions": [
+                            "Выберите другую дату",
+                            "Уменьшите количество пассажиров",
+                            f"Текущее количество пассажиров: {adults_count} взр., {children_count} дет.",
+                            "Попробуйте другой класс обслуживания"
+                        ]
+                    }
+                
+                # Если мы дошли сюда, то нет ни результатов, ни сообщения об отсутствии рейсов
+                if status_callback:
+                    await status_callback("⚠️ не найдены направления рейсов, но страница загружена")
+                return {"error": "No directions found"}
+            
+            # Обработка найденных направлений
+            for idx, frame in enumerate(direction_frames):
+                try:
+                    direction_text = frame.text
+                    direction_type = "there" if idx == 0 else "back"
+                    
+                    if status_callback:
+                        await status_callback(f"📊 обрабатываю рейсы {direction_text}...")
+                    
+                    # находим все карточки рейсов для текущего направления
+                    parent_frame = frame.find_element(By.XPATH, "./ancestor::div[contains(@class,'frame') and contains(@class,'flight-searchs')]")
+                    cards = parent_frame.find_elements(By.XPATH, ".//div[contains(@class,'flight-search') and @tabindex='0']")
+                    
+                    if not cards:
+                        if status_callback:
+                            await status_callback(f"ℹ️ не найдено рейсов для направления {direction_text}")
+                        results[direction_type] = []
+                    else:
+                        if status_callback:
+                            await status_callback(f"✅ найдено {len(cards)} карточек рейсов для направления {direction_text}")
+                            
+                        for card_idx, card in enumerate(cards, 1):
+                            try:
+                                if status_callback:
+                                    await status_callback(f"🎫 обрабатываю билет {card_idx}/{len(cards)} для направления {direction_text}...")
+                                
+                                flight_data = extract_flight_data(card, card_idx, driver, wait)
+                                results[direction_type].append(flight_data)
+                                
+                                if status_callback:
+                                    await status_callback(f"✅ билет {card_idx}/{len(cards)} обработан успешно")
+                            except Exception as e:
+                                if status_callback:
+                                    await status_callback(f"⚠️ ошибка при обработке билета {card_idx}: {str(e)}")
+                        
+                        if status_callback:
+                            await status_callback(f"✅ обработано {len(results[direction_type])} рейсов для направления {direction_text}")
+                
+                except Exception as e:
+                    if status_callback:
+                        await status_callback(f"⚠️ ошибка при обработке направления {idx}: {str(e)}")
             
             if status_callback:
-                await status_callback(f"📊 обрабатываю рейсы {direction_text}...")
+                await status_callback("✅ обработка результатов завершена")
             
-            # находим все карточки рейсов для текущего направления
-            parent_frame = frame.find_element(By.XPATH, "./ancestor::div[contains(@class,'frame') and contains(@class,'flight-searchs')]")
-            cards = parent_frame.find_elements(By.XPATH, ".//div[contains(@class,'flight-search') and @tabindex='0']")
+            return results
             
-            if not cards:
-                if status_callback:
-                    await status_callback(f"ℹ️ не найдено рейсов для направления {direction_text}")
-                results[direction_type] = []
-            else:
-                for card_idx, card in enumerate(cards, 1):
-                    flight_data = extract_flight_data(card, card_idx, driver, wait)
-                    results[direction_type].append(flight_data)
-
-        return results
+        except Exception as e:
+            if status_callback:
+                await status_callback(f"❌ произошла ошибка при обработке результатов: {str(e)}")
+            return {"error": f"Results processing error: {str(e)}"}
 
     except Exception as e:
         if status_callback:
@@ -245,6 +353,8 @@ def extract_flight_data(card, card_idx, driver, wait):
         dict: данные о рейсе
     """
     try:
+        print(f"Обрабатываю карточку рейса #{card_idx}")
+        
         # определение наличия пересадки
         has_transfer = False
         transfer_time = None
@@ -364,8 +474,13 @@ def extract_flight_data(card, card_idx, driver, wait):
             # ожидаем открытия модального окна с тарифами
             time.sleep(2)
             
-            # получаем информацию о тарифе "стандарт"
-            miles_cost, rubles_cost = get_tariff_info(driver, wait)
+            # Ограничиваем время на получение тарифа
+            try:
+                # получаем информацию о тарифе "стандарт"
+                miles_cost, rubles_cost = get_tariff_info(driver, wait)
+            except Exception as tariff_error:
+                print(f"Ошибка при получении данных о тарифе: {tariff_error}")
+                miles_cost, rubles_cost = "—", "—"
             
             # ожидаем закрытия модального окна
             time.sleep(1)
@@ -384,7 +499,9 @@ def extract_flight_data(card, card_idx, driver, wait):
             "rubles_cost": rubles_cost
         }
         
+        print(f"Карточка рейса #{card_idx} успешно обработана")
         return flight_data
+        
     except Exception as e:
         print(f"ошибка при извлечении данных о рейсе: {e}")
         # возвращаем пустой объект с базовыми данными вместо None
