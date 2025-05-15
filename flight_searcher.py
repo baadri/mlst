@@ -79,7 +79,7 @@ async def search_flights(
     children_count = max(0, min(4, int(children_count)))  # от 0 до 4, убеждаемся что это число
     
     # формируем URL для поиска, явно указывая количество пассажиров
-    url = f'https://www.aeroflot.ru/sb/app/ru-ru#/search?adults={adults_count}&children={children_count}&childrenaward={children_count}&&award=Y&cabin={service_class}&infants=0'
+    url = f'https://www.aeroflot.ru/sb/app/ru-ru#/search?adults={adults_count}&children={children_count}&childrenaward={children_count}&award=Y&cabin={service_class}&infants=0'
     
     if return_date:
         url += f'&routes={from_code}.{formatted_depart_date}.{to_code}-{to_code}.{formatted_return_date}.{from_code}'
