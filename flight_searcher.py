@@ -10,6 +10,8 @@ from selenium.webdriver.common.by import By
 from selenium.webdriver.support.ui import WebDriverWait
 from selenium.webdriver.support import expected_conditions as EC
 from selenium.common.exceptions import NoSuchElementException, TimeoutException, ElementClickInterceptedException
+# Импортируем словарь из отдельного файла
+from city_codes import CITY_TO_IATA
 
 # словарь соответствия классов обслуживания
 CLASS_MAP = {
@@ -18,16 +20,7 @@ CLASS_MAP = {
     "бизнес": "business"
 }
 
-# словарь соответствия IATA-кодов и городов
-CITY_TO_IATA = {
-    "москва": "MOW",
-    "санкт-петербург": "LED",
-    "анадырь": "DYR",
-    "сочи": "AER",
-    "абакан": "ABA",
-    "абу-даби": "AUH",
-}
-
+# Теперь словарь CITY_TO_IATA импортируется из отдельного файла
 
 async def search_flights(
     from_city, 
