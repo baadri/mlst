@@ -2,6 +2,7 @@
 import logging
 import os
 import asyncio
+from city_codes import CITY_TO_IATA, find_city  # Добавляем импорт функции find_city
 from flight_searcher import search_flights
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
@@ -9,6 +10,8 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 from dotenv import load_dotenv
+# Обновляем импорты
+
 
 
 
@@ -61,16 +64,49 @@ async def cmd_search(message: types.Message, state: FSMContext):
 # Обработчик ввода города отправления
 @dp.message(FlightSearch.waiting_for_from)
 async def process_from(message: types.Message, state: FSMContext):
-    await state.update_data(from_city=message.text)
-    await state.set_state(FlightSearch.waiting_for_to)
-    await message.answer(f"Город отправления: {message.text}\nТеперь укажите город прибытия:")
+    city_input = message.text
+    
+    # Проверяем город на наличие в словаре
+    if is_valid_city(city_input):
+        await state.update_data(from_city=city_input)
+        await state.set_state(FlightSearch.waiting_for_to)
+        await message.answer(f"Город отправления: {city_input}\nТеперь укажите город прибытия:")
+    else:
+        closest_matches = find_closest_matches(city_input)
+        suggestion_text = ""
+        
+        if closest_matches:
+            suggestion_text = "\n\nВозможно, вы имели в виду один из этих городов:\n" + "\n".join(closest_matches)
+        
+        await message.answer(f"⚠️ Город \"{city_input}\" не найден в нашей базе данных. Пожалуйста, проверьте правильность написания и введите город снова.{suggestion_text}")
 
 # Обработчик ввода города прибытия
 @dp.message(FlightSearch.waiting_for_to)
 async def process_to(message: types.Message, state: FSMContext):
-    await state.update_data(to_city=message.text)
-    await state.set_state(FlightSearch.waiting_for_depart_date)
-    await message.answer(f"Город прибытия: {message.text}\nУкажите дату вылета туда в формате ДД.ММ.ГГГГ:")
+    city_input = message.text
+    
+    # Проверяем город на наличие в словаре
+    if is_valid_city(city_input):
+        # Получаем ранее введенный город отправления
+        user_data = await state.get_data()
+        from_city = user_data.get('from_city', '')
+        
+        # Убедимся, что города разные
+        if is_same_city(from_city, city_input):
+            await message.answer("⚠️ Город прибытия должен отличаться от города отправления. Пожалуйста, введите другой город.")
+            return
+            
+        await state.update_data(to_city=city_input)
+        await state.set_state(FlightSearch.waiting_for_depart_date)
+        await message.answer(f"Город прибытия: {city_input}\nУкажите дату вылета туда в формате ДД.ММ.ГГГГ:")
+    else:
+        closest_matches = find_closest_matches(city_input)
+        suggestion_text = ""
+        
+        if closest_matches:
+            suggestion_text = "\n\nВозможно, вы имели в виду один из этих городов:\n" + "\n".join(closest_matches)
+            
+        await message.answer(f"⚠️ Город \"{city_input}\" не найден в нашей базе данных. Пожалуйста, проверьте правильность написания и введите город снова.{suggestion_text}")
 
 # Обработчик ввода даты вылета
 @dp.message(FlightSearch.waiting_for_depart_date)
@@ -85,6 +121,88 @@ async def process_depart_date(message: types.Message, state: FSMContext):
     
     await state.set_state(FlightSearch.asking_return_flight)
     await message.answer(f"Дата вылета: {message.text}\nНужен ли обратный рейс?", reply_markup=markup)
+    
+def is_valid_city(city):
+    """
+    Проверяет, существует ли город в словаре CITY_TO_IATA или это валидный IATA-код
+    
+    Args:
+        city (str): Название города или IATA-код
+        
+    Returns:
+        bool: True если город найден, иначе False
+    """
+    # Если это IATA-код (3 буквы)
+    if len(city) == 3 and city.upper().isalpha():
+        # Проверяем, есть ли этот код среди значений словаря
+        return city.upper() in CITY_TO_IATA.values()
+    
+    # Иначе проверяем наличие города в словаре (без учета регистра)
+    return city.lower() in CITY_TO_IATA
+
+def is_same_city(city1, city2):
+    """
+    Проверяет, относятся ли два города к одному и тому же месту
+    
+    Args:
+        city1 (str): Название первого города или его IATA-код
+        city2 (str): Название второго города или его IATA-код
+        
+    Returns:
+        bool: True если города одинаковые, иначе False
+    """
+    # Получаем IATA-коды для обоих городов
+    if len(city1) == 3 and city1.upper().isalpha():
+        code1 = city1.upper()
+    else:
+        code1 = CITY_TO_IATA.get(city1.lower(), "")
+    
+    if len(city2) == 3 and city2.upper().isalpha():
+        code2 = city2.upper() 
+    else:
+        code2 = CITY_TO_IATA.get(city2.lower(), "")
+    
+    # Сравниваем коды
+    return code1 == code2 and code1 != ""
+
+def find_closest_matches(city, max_matches=3):
+    """
+    Находит ближайшие совпадения для введенного города
+    
+    Args:
+        city (str): Введенный пользователем город
+        max_matches (int): Максимальное количество предложений
+        
+    Returns:
+        list: Список строк с предложениями
+    """
+    matches = []
+    city_lower = city.lower()
+    
+    # Если похоже на IATA-код, но такого кода нет
+    if len(city) == 3 and city.upper().isalpha() and city.upper() not in CITY_TO_IATA.values():
+        # Предлагаем города, начинающиеся с тех же букв
+        for c, code in CITY_TO_IATA.items():
+            if code.startswith(city[0].upper()):
+                matches.append(f"• {c.capitalize()} ({code})")
+                if len(matches) >= max_matches:
+                    break
+        return matches
+    
+    # Иначе ищем частичные совпадения по названию
+    for c in CITY_TO_IATA:
+        if city_lower in c or c in city_lower:
+            matches.append(f"• {c.capitalize()} ({CITY_TO_IATA[c]})")
+            if len(matches) >= max_matches:
+                break
+    
+    # Если ничего не нашлось, предлагаем самые популярные города
+    if not matches:
+        popular_cities = ["москва", "санкт-петербург", "сочи", "стамбул", "дубай"]
+        for c in popular_cities[:max_matches]:
+            matches.append(f"• {c.capitalize()} ({CITY_TO_IATA[c]})")
+    
+    return matches
 
 # Обновляем обработчик ввода даты отправления или выбора обратного рейса
 @dp.message(FlightSearch.asking_return_flight)
