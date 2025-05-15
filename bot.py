@@ -184,28 +184,6 @@ async def process_class(message: types.Message, state: FSMContext):
     if not there_flights and not back_flights:
         await message.answer("❌ К сожалению, ничего не найдено. Попробуйте изменить параметры поиска.")
         return
-    """ 
-    #ОТЛАДКА В функции process_class, после поиска результатов
-    if there_flights:
-        await message.answer(f"✅ Найдено {len(there_flights)} рейсов туда")
-    
-    # Добавьте отладочный вывод
-    print(f"there_flights: {there_flights}")
-    
-    # Отправляем информацию о каждом рейсе туда
-    for flight in there_flights:
-        flight_info = format_flight_info(flight, "туда")
-        print(f"flight_info: {flight_info}")
-        
-        # Попробуем отправить по частям, на случай если сообщение слишком длинное
-        try:
-            await message.answer(flight_info, parse_mode="HTML")
-        except Exception as e:
-            print(f"Ошибка при отправке сообщения: {e}")
-            # Пробуем отправить без HTML-форматирования
-            plain_text = flight_info.replace("<b>", "").replace("</b>", "").replace("<u>", "").replace("</u>", "")
-            await message.answer(plain_text)
-    """
             
     # Отправляем краткую информацию о найденных рейсах
     if there_flights:
@@ -299,11 +277,6 @@ def format_flight_info(flight, direction):
         )
     
     return route_info
-                        
-
-    # Здесь будет вызов функции поиска билетов с помощью Selenium
-    # Временно заменяем заглушкой
-    #await message.answer("🔄 Функция поиска билетов находится в разработке. Скоро мы добавим эту возможность!")
 
 # Запуск бота
 async def main():
