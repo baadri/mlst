@@ -2,6 +2,7 @@
 import asyncio
 import re
 import time
+import os
 from datetime import datetime
 from selenium import webdriver
 from selenium.webdriver.chrome.service import Service
@@ -25,7 +26,6 @@ CITY_TO_IATA = {
     "сочи": "AER",
     "абакан": "ABA",
     "абу-даби": "AUH",
-
 }
 
 
@@ -83,7 +83,9 @@ async def search_flights(
         await status_callback(f"🔍 начинаю поиск билетов...\nURL: {url}")
     
     # запуск Selenium
-    service = Service('chromedriver.exe')
+    # Используем относительный или абсолютный путь в зависимости от ОС
+    chromedriver_path = 'chromedriver.exe' if os.name == 'nt' else './chromedriver'
+    service = Service(chromedriver_path)
     options = webdriver.ChromeOptions()
     driver = webdriver.Chrome(service=service, options=options)
     driver.maximize_window()
@@ -148,8 +150,6 @@ async def search_flights(
                     await status_callback(f"ℹ️ не найдено рейсов для направления {direction_text}")
                 results[direction_type] = []
             else:
-# в функции search_flights, участок кода где обрабатываются карточки:
-
                 for card_idx, card in enumerate(cards, 1):
                     flight_data = extract_flight_data(card, card_idx, driver, wait)
                     results[direction_type].append(flight_data)
@@ -186,17 +186,42 @@ def extract_flight_data(card, card_idx, driver, wait):
             transfer_time = transfer_element.text.replace("пересадка", "").strip()
         except Exception:
             pass
+        
+        # Также определяем наличие пересадки по количеству сегментов полета
+        segments = card.find_elements(By.XPATH, ".//div[contains(@class,'flight-search__flights') and @role='row']")
+        valid_segments_count = 0
+        for seg in segments:
+            # проверяем, является ли этот сегмент информационной строкой о пересадке или дате
+            if seg.find_elements(By.XPATH, ".//div[contains(@class,'flight-search__transfer')]"):
+                continue  # пропускаем информационные строки
+            
+            # проверяем наличие информации о вылете/прилете
+            time_destination = seg.find_elements(By.XPATH, ".//div[contains(@class,'time-destination__row')]")
+            if time_destination:
+                valid_segments_count += 1
+        
+        # Если больше одного сегмента, значит есть пересадки
+        if valid_segments_count > 1:
+            has_transfer = True
+            if transfer_time is None:
+                transfer_time = f"{valid_segments_count - 1} пересадка(и)"
 
         # извлечение количества доступных мест
+        seats_left_val = "—"
         try:
-            seats_left_text = card.find_element(By.XPATH, ".//div[contains(@class,'flight-search__left')]").text
-            seats_left_val = extract_seats_text(seats_left_text)
-        except Exception:
-            seats_left_val = "—"
+            # Ищем элемент с классом flight-search__left в текущей карточке
+            seats_elements = card.find_elements(By.XPATH, ".//div[contains(@class,'flight-search__left')]")
+            if seats_elements:
+                for element in seats_elements:
+                    seats_text = element.text
+                    if "доступно мест" in seats_text.lower():
+                        seats_left_val = extract_seats_text(seats_text)
+                        break
+        except Exception as e:
+            print(f"Ошибка при извлечении количества мест: {e}")
         
         # получение и обработка только валидных сегментов полета
         valid_segments = []
-        segments = card.find_elements(By.XPATH, ".//div[contains(@class,'flight-search__flights') and @role='row']")
         
         for seg in segments:
             # проверяем, является ли этот сегмент информационной строкой о пересадке или дате
@@ -357,126 +382,25 @@ def get_tariff_info(driver, wait):
     except Exception as e:
         print(f"ошибка при получении данных о тарифе: {e}")
         return "—", "—"
-    
-    # составляем итоговый результат
-    flight_data = {
-        "id": card_idx,
-        "seats_available": seats_left_val,
-        "has_transfer": has_transfer,
-        "transfer_time": transfer_time if has_transfer else None,
-        "segments": valid_segments,
-        "miles_cost": miles_cost,
-        "rubles_cost": rubles_cost
-    }
-    
-    return flight_data
-    """
-    извлекает данные о рейсе из карточки.
-    
-    Args:
-        card: элемент карточки рейса
-        card_idx: индекс карточки
-        
-    Returns:
-        dict: данные о рейсе
-    """
-    # определение наличия пересадки
-    has_transfer = False
-    transfer_time = None
-    try:
-        transfer_element = card.find_element(By.XPATH, ".//span[contains(text(),'пересадка')]")
-        has_transfer = True
-        transfer_time = transfer_element.text.replace("пересадка", "").strip()
-    except Exception:
-        pass
-
-    # извлечение количества доступных мест
-    try:
-        seats_left_text = card.find_element(By.XPATH, ".//div[contains(@class,'flight-search__left')]").text
-        seats_left_val = extract_seats_text(seats_left_text)
-    except Exception:
-        seats_left_val = "—"
-    
-    # получение и обработка только валидных сегментов полета
-    valid_segments = []
-    segments = card.find_elements(By.XPATH, ".//div[contains(@class,'flight-search__flights') and @role='row']")
-    
-    for seg in segments:
-        # проверяем, является ли этот сегмент информационной строкой о пересадке или дате
-        if seg.find_elements(By.XPATH, ".//div[contains(@class,'flight-search__transfer')]"):
-            continue  # пропускаем информационные строки
-        
-        # проверяем наличие информации о вылете/прилете
-        time_destination = seg.find_elements(By.XPATH, ".//div[contains(@class,'time-destination__row')]")
-        if not time_destination:
-            continue  # пропускаем сегменты без информации о маршруте
-        
-        # город вылета/прилета
-        depart_city = safe_find_text(seg, ".//span[contains(@class,'helptext--left')]")
-        arrive_city = safe_find_text(seg, ".//span[contains(@class,'helptext--right')]")
-        
-        # время вылета
-        dep_time = safe_find_text(seg, ".//div[contains(@class,'time-destination__from')]//span[contains(@class,'time-destination__time')]")
-        
-        # время прилета
-        try:
-            arr_block = seg.find_element(By.XPATH, ".//div[contains(@class,'time-destination__to')]/div[contains(@class,'time-destination__time')]")
-            arr_time = arr_block.find_element(By.XPATH, ".//span").text
-            try:
-                plus_day = arr_block.find_element(By.XPATH, ".//span[contains(@class,'time-destination__plusday')]").text
-                arr_time = f"{arr_time} {plus_day}"
-            except Exception:
-                pass
-        except Exception:
-            arr_time = "—"
-
-        # IATA
-        try:
-            iata_from = seg.find_element(By.XPATH, ".//div[contains(@class,'time-destination__from')]/span[contains(@class,'time-destination__airport')]").text
-        except Exception:
-            iata_from = "—"
-        try:
-            iata_to = seg.find_element(By.XPATH, ".//div[contains(@class,'time-destination__to')]/span[contains(@class,'time-destination__airport')]").text
-        except Exception:
-            iata_to = "—"
-        
-        # компания и номер, модель
-        airline = safe_find_text(seg, ".//div[contains(@class,'flight-search__company-name')]")
-        flight_number = safe_find_text(seg, ".//div[contains(@class,'flight-search__plane-number') and not(contains(@class,'hide--above-desktop'))]")
-        if flight_number == "—":
-            # попробуем получить номер рейса из мобильной версии
-            flight_number = safe_find_text(seg, ".//div[contains(@class,'flight-search__plane-number')]")
-        
-        plane_model = safe_find_text(seg, ".//div[contains(@class,'flight-search__plane-model')]")
-
-        valid_segments.append({
-            "depart_city": depart_city,
-            "arrive_city": arrive_city,
-            "dep_time": dep_time,
-            "arr_time": arr_time,
-            "iata_from": iata_from,
-            "iata_to": iata_to,
-            "airline": airline,
-            "flight_number": flight_number,
-            "plane_model": plane_model
-        })
-
-    # составляем итоговый результат
-    flight_data = {
-        "id": card_idx,
-        "seats_available": seats_left_val,
-        "has_transfer": has_transfer,
-        "transfer_time": transfer_time if has_transfer else None,
-        "segments": valid_segments
-    }
-    
-    return flight_data
 
 def extract_seats_text(text):
     """извлекает количество доступных мест из текста"""
-    match = re.search(r'доступно мест по текущей цене:\s*(\d+)', text)
+    # Сделаем поиск более гибким, учитывая разные форматы и регистры
+    text = text.lower()
+    match = re.search(r'доступно\s+мест\s+по\s+текущей\s+цене:\s*(\d+)', text)
     if match:
         return match.group(1)
+    
+    # Попробуем другие варианты формата
+    match = re.search(r'доступно\s+(\d+)\s+мест', text)
+    if match:
+        return match.group(1)
+    
+    # Просто найдем числовое значение, если оно есть
+    match = re.search(r':\s*(\d+)', text)
+    if match:
+        return match.group(1)
+    
     return "—"
 
 def safe_find_text(el, xpath):
