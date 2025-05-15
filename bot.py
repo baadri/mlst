@@ -32,6 +32,7 @@ class FlightSearch(StatesGroup):
     asking_return_flight = State()  # Спрашиваем, нужен ли обратный рейс
     waiting_for_return_date = State()  # Ожидание ввода даты возвращения
     waiting_for_class = State() # Ожидание выбора класса
+    waiting_for_flight_type = State() # Ожидание выбора типа рейса (прямой/с пересадками)
 
 # Обработчик команды /start
 @dp.message(Command("start"))
@@ -125,14 +126,37 @@ async def process_return_date(message: types.Message, state: FSMContext):
 async def process_class(message: types.Message, state: FSMContext):
     await state.update_data(class_type=message.text.lower())
     
+        # Создаем клавиатуру для выбора типа рейса
+    markup = types.ReplyKeyboardMarkup(keyboard=[
+        [types.KeyboardButton(text="Только прямые рейсы")],
+        [types.KeyboardButton(text="Все рейсы")],
+        [types.KeyboardButton(text="Только рейсы с пересадками")]
+    ], resize_keyboard=True)
+    
+    await state.set_state(FlightSearch.waiting_for_flight_type)
+    await message.answer("Какие рейсы вас интересуют?", reply_markup=markup)
+    
+    # Добавляем обработчик выбора типа рейса
+@dp.message(FlightSearch.waiting_for_flight_type)
+async def process_flight_type(message: types.Message, state: FSMContext):
+    flight_type = message.text
+    
+        # Перевод выбора пользователя в значение для фильтра
+    flight_filter = "all"  # По умолчанию - все рейсы
+    if flight_type == "Только прямые рейсы":
+        flight_filter = "direct"
+    elif flight_type == "Только рейсы с пересадками":
+        flight_filter = "connections"
+    
+    await state.update_data(flight_filter=flight_filter)
+    
     # Получаем все данные из состояния
     user_data = await state.get_data()
     await state.clear()
     
     # Удаляем клавиатуру
     markup = types.ReplyKeyboardRemove()
-    
-    # Формируем сообщение с параметрами поиска
+      
     search_params = (
         f"🔍 Параметры поиска:\n"
         f"✈️ Откуда: {user_data['from_city']}\n"
@@ -145,7 +169,16 @@ async def process_class(message: types.Message, state: FSMContext):
     else:
         search_params += "🔄 Без обратного рейса\n"
         
-    search_params += f"🛋 Класс: {user_data.get('class_type', '—')}"
+    search_params += f"🛋 Класс: {user_data.get('class_type', '—')}\n"
+    
+    # Добавляем информацию о типе рейса
+    filter_text = "Все типы рейсов"
+    if user_data.get('flight_filter') == "direct":
+        filter_text = "Только прямые рейсы"
+    elif user_data.get('flight_filter') == "connections":
+        filter_text = "Только рейсы с пересадками"
+    
+    search_params += f"🛫 Тип рейса: {filter_text}"
     
     search_message = await message.answer(search_params, reply_markup=markup)
     status_message = await message.answer("🕒 Начинаю поиск билетов...")
@@ -169,6 +202,7 @@ async def process_class(message: types.Message, state: FSMContext):
         depart_date=user_data['depart_date'],
         return_date=user_data.get('return_date'),
         class_type=user_data.get('class_type', 'эконом'),
+        flight_filter=user_data.get('flight_filter', 'all'),  # Добавляем параметр фильтрации
         status_callback=update_status
     )
     
