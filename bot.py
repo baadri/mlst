@@ -3,14 +3,13 @@ import logging
 import os
 import asyncio
 from city_codes import CITY_TO_IATA, find_city  # Добавляем импорт функции find_city
-from flight_searcher import search_flights
+from flight_searcher import search_flights, search_roundtrip, create_browser  # Добавляем импорт новых функций
 from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 from dotenv import load_dotenv
-# Обновляем импорты
 
 
 
@@ -78,7 +77,7 @@ async def process_from(message: types.Message, state: FSMContext):
         if closest_matches:
             suggestion_text = "\n\nВозможно, вы имели в виду один из этих городов:\n" + "\n".join(closest_matches)
         
-        await message.answer(f"⚠️ Город \"{city_input}\" не найден в нашей базе данных. Пожалуйста, проверьте правильность написания и введите город снова.{suggestion_text}")
+        await message.answer(f"⚠️ Город \"{city_input}\" не найден в нашей базе данных. Пожалуйста, проверьте правильность написания или выберите город из предложенных.{suggestion_text}")
 
 # Обработчик ввода города прибытия
 @dp.message(FlightSearch.waiting_for_to)
@@ -106,7 +105,7 @@ async def process_to(message: types.Message, state: FSMContext):
         if closest_matches:
             suggestion_text = "\n\nВозможно, вы имели в виду один из этих городов:\n" + "\n".join(closest_matches)
             
-        await message.answer(f"⚠️ Город \"{city_input}\" не найден в нашей базе данных. Пожалуйста, проверьте правильность написания и введите город снова.{suggestion_text}")
+        await message.answer(f"⚠️ Город \"{city_input}\" не найден в нашей базе данных. Пожалуйста, проверьте правильность написания или выберите город из предложенных.{suggestion_text}")
 
 # Обработчик ввода даты вылета
 @dp.message(FlightSearch.waiting_for_depart_date)
@@ -324,7 +323,7 @@ async def process_flight_type(message: types.Message, state: FSMContext):
     # Запускаем поиск с собранными данными
     await process_search_with_data(message, state, user_data)
 
-# Функция для запуска поиска с заданными параметрами
+# Функция для запуска поиска с заданными параметрами (модифицированная)
 async def process_search_with_data(message, state, user_data):
     # Удаляем клавиатуру
     markup = types.ReplyKeyboardRemove()
@@ -374,18 +373,32 @@ async def process_search_with_data(message, state, user_data):
             # Если не удаётся обновить, отправляем новое
             status_info[0] = await message.answer(text)
     
-    # Запускаем поиск билетов с добавленными параметрами
-    search_result = await search_flights(
-        from_city=user_data['from_city'],
-        to_city=user_data['to_city'],
-        depart_date=user_data['depart_date'],
-        return_date=user_data.get('return_date'),
-        adults_count=user_data.get('adults_count', 1),
-        children_count=user_data.get('children_count', 0),
-        class_type=user_data.get('class_type', 'эконом'),
-        flight_filter=user_data.get('flight_filter', 'all'),
-        status_callback=update_status
-    )
+    # Запускаем поиск билетов с учетом наличия обратного рейса
+    if user_data.get('return_date'):
+        # Если нужен обратный рейс, используем функцию search_roundtrip
+        search_result = await search_roundtrip(
+            from_city=user_data['from_city'],
+            to_city=user_data['to_city'],
+            depart_date=user_data['depart_date'],
+            return_date=user_data['return_date'],
+            adults_count=user_data.get('adults_count', 1),
+            children_count=user_data.get('children_count', 0),
+            class_type=user_data.get('class_type', 'эконом'),
+            flight_filter=user_data.get('flight_filter', 'all'),
+            status_callback=update_status
+        )
+    else:
+        # Если обратный рейс не нужен, используем обычную функцию search_flights
+        search_result, _ = await search_flights(
+            from_city=user_data['from_city'],
+            to_city=user_data['to_city'],
+            depart_date=user_data['depart_date'],
+            adults_count=user_data.get('adults_count', 1),
+            children_count=user_data.get('children_count', 0),
+            class_type=user_data.get('class_type', 'эконом'),
+            flight_filter=user_data.get('flight_filter', 'all'),
+            status_callback=update_status
+        )
     
     # Используем существующую логику для обработки результатов
     await process_search_results(message, state, search_result)
@@ -394,11 +407,11 @@ async def process_search_with_data(message, state, user_data):
 async def process_search_results(message, state, search_result):
     # Проверяем, есть ли ошибка в результате
     if "error" in search_result:
-        # Обработка разных типов ошибок
+        # Обработка разных типов ошиasync def process_search_resultsбок
         error_type = search_result.get("error")
         
         if error_type in ["no_flights_available", "no_direct_flights", "no_connection_flights"]:
-            error_message = f"❗️ {search_result.get('message', 'На выбранные даты рейсы не найдены.')}."
+            error_message = f"❗️ {search_result.get('message', 'На выбранные даты рейсы не найдены')}."
             
             # Добавляем рекомендации
             if "suggestions" in search_result:

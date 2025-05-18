@@ -20,18 +20,34 @@ CLASS_MAP = {
     "бизнес": "business"
 }
 
-# Теперь словарь CITY_TO_IATA импортируется из отдельного файла
+async def create_browser():
+    """
+    Создает и возвращает экземпляр браузера
+    
+    Returns:
+        tuple: (driver, wait) - экземпляр WebDriver и WebDriverWait
+    """
+    # Используем относительный или абсолютный путь в зависимости от ОС
+    chromedriver_path = 'chromedriver.exe' if os.name == 'nt' else './chromedriver'
+    service = Service(chromedriver_path)
+    options = webdriver.ChromeOptions()
+    driver = webdriver.Chrome(service=service, options=options)
+    driver.maximize_window()
+    wait = WebDriverWait(driver, 15)  # Увеличиваем время ожидания до 15 секунд
+    return driver, wait
 
 async def search_flights(
     from_city, 
     to_city, 
     depart_date, 
-    return_date=None, 
+    return_date=None,  # Этот параметр оставляем для обратной совместимости, но не используем
     adults_count=1,
     children_count=0,
     class_type="economy", 
     flight_filter="all",
-    status_callback=None
+    status_callback=None,
+    driver=None,
+    wait=None
 ):
     """
     асинхронная функция для поиска авиабилетов через Selenium.
@@ -40,16 +56,21 @@ async def search_flights(
         from_city (str): город отправления
         to_city (str): город прибытия
         depart_date (str): дата вылета в формате дд.мм.гггг
-        return_date (str, optional): дата возвращения в формате дд.мм.гггг
+        return_date (str, optional): параметр для обратной совместимости
         adults_count (int, optional): количество взрослых пассажиров (от 1 до 6)
         children_count (int, optional): количество детей (от 0 до 4)
         class_type (str, optional): класс обслуживания (эконом, комфорт, бизнес)
         flight_filter (str, optional): фильтр типа рейса ('all', 'direct', 'connections')
         status_callback (callable, optional): функция для отправки статусных сообщений
+        driver (WebDriver, optional): экземпляр WebDriver для повторного использования
+        wait (WebDriverWait, optional): экземпляр WebDriverWait для повторного использования
         
     Returns:
-        dict: результаты поиска
+        tuple: (результаты поиска, флаг нужно ли закрывать браузер)
     """
+    # Флаг, указывающий, создали ли мы браузер в этой функции
+    browser_created_here = False
+    
     # если передан код города, используем его, иначе пытаемся определить по названию
     from_code = from_city.upper() if len(from_city) == 3 else CITY_TO_IATA.get(from_city.lower(), from_city)
     to_code = to_city.upper() if len(to_city) == 3 else CITY_TO_IATA.get(to_city.lower(), to_city)
@@ -58,42 +79,38 @@ async def search_flights(
     try:
         depart_date_obj = datetime.strptime(depart_date, '%d.%m.%Y')
         formatted_depart_date = depart_date_obj.strftime('%Y%m%d')
-        
-        if return_date:
-            return_date_obj = datetime.strptime(return_date, '%d.%m.%Y')
-            formatted_return_date = return_date_obj.strftime('%Y%m%d')
     except ValueError:
         if status_callback:
             await status_callback("❌ неверный формат даты! используйте формат дд.мм.гггг")
-        return {"error": "Invalid date format"}
+        return {"error": "Invalid date format"}, browser_created_here
     
     # определяем класс обслуживания
     service_class = CLASS_MAP.get(class_type.lower(), "economy")
     
     # Проверяем и ограничиваем количество пассажиров
-    adults_count = max(1, min(6, int(adults_count)))  # от 1 до 6, убеждаемся что это число
-    children_count = max(0, min(4, int(children_count)))  # от 0 до 4, убеждаемся что это число
+    adults_count = max(1, min(6, int(adults_count)))  # от 1 до 6
+    children_count = max(0, min(4, int(children_count)))  # от 0 до 4
     
     # формируем URL для поиска, явно указывая количество пассажиров
     url = f'https://www.aeroflot.ru/sb/app/ru-ru#/search?adults={adults_count}&children={children_count}&childrenaward={children_count}&award=Y&cabin={service_class}&infants=0'
     
-    if return_date:
-        url += f'&routes={from_code}.{formatted_depart_date}.{to_code}-{to_code}.{formatted_return_date}.{from_code}'
-    else:
-        url += f'&routes={from_code}.{formatted_depart_date}.{to_code}'
+    # Всегда используем маршрут в одну сторону
+    url += f'&routes={from_code}.{formatted_depart_date}.{to_code}'
     
     if status_callback:
         await status_callback(f"🔍 начинаю поиск билетов...\n👥 Пассажиры: {adults_count} взр., {children_count} дет.\nURL: {url}")
     
-    # запуск Selenium
-    # Используем относительный или абсолютный путь в зависимости от ОС
-    chromedriver_path = 'chromedriver.exe' if os.name == 'nt' else './chromedriver'
-    service = Service(chromedriver_path)
-    options = webdriver.ChromeOptions()
-    driver = webdriver.Chrome(service=service, options=options)
-    driver.maximize_window()
+    # Если браузер не передан, создаем новый экземпляр
+    if driver is None or wait is None:
+        browser_created_here = True
+        try:
+            driver, wait = await create_browser()
+        except Exception as e:
+            if status_callback:
+                await status_callback(f"❌ Не удалось запустить браузер: {str(e)}")
+            return {"error": f"Browser initialization failed: {str(e)}"}, browser_created_here
     
-    results = {"there": [], "back": []}
+    results = {"there": []}  # Упрощаем структуру результатов
     
     try:
         if status_callback:
@@ -114,7 +131,7 @@ async def search_flights(
         except (NoSuchElementException, TimeoutException):
             if status_callback:
                 await status_callback("⚠️ кнопка 'найти' не найдена или не кликабельна")
-            return {"error": "Search button not found"}
+            return {"error": "Search button not found"}, browser_created_here
 
         # Проверяем наличие сообщения "На выбранные даты рейсы не найдены"
         try:
@@ -127,7 +144,7 @@ async def search_flights(
             
             if no_flights_message:
                 if status_callback:
-                    await status_callback("ℹ️ На выбранные даты рейсы не найдены. Попробуйте изменить дату, уменьшить количество пассажиров или выбрать другой класс обслуживания.")
+                    await status_callback("ℹ️ На выбранные даты рейсы не найдены. Попробуйте изменить дату, уменьшить количество пассажиров.")
                 return {
                     "error": "no_flights_available",
                     "message": "На выбранные даты рейсы не найдены",
@@ -137,7 +154,7 @@ async def search_flights(
                         f"Текущее количество пассажиров: {adults_count} взр., {children_count} дет.",
                         "Попробуйте другой класс обслуживания"
                     ]
-                }
+                }, browser_created_here
 
             # Ожидание результатов поиска
             try:
@@ -156,7 +173,7 @@ async def search_flights(
                 
                 if no_flights_message:
                     if status_callback:
-                        await status_callback("ℹ️ На выбранные даты рейсы не найдены. Попробуйте изменить дату, уменьшить количество пассажиров или выбрать другой класс обслуживания.")
+                        await status_callback("ℹ️ На выбранные даты рейсы не найдены. Попробуйте изменить дату, уменьшить количество пассажиров.")
                     return {
                         "error": "no_flights_available",
                         "message": "На выбранные даты рейсы не найдены",
@@ -166,11 +183,11 @@ async def search_flights(
                             f"Текущее количество пассажиров: {adults_count} взр., {children_count} дет.",
                             "Попробуйте другой класс обслуживания"
                         ]
-                    }
+                    }, browser_created_here
                         
                 if status_callback:
                     await status_callback("⚠️ Timeout: результаты поиска не загрузились за отведенное время")
-                return {"error": "Search results timeout"}
+                return {"error": "Search results timeout"}, browser_created_here
                 
         except Exception as e:
             # Если произошла ошибка при проверке наличия сообщений, продолжаем обычный поиск
@@ -211,7 +228,7 @@ async def search_flights(
                             f"Текущее количество пассажиров: {adults_count} взр., {children_count} дет.",
                             "Попробуйте другой класс обслуживания"
                         ]
-                    }
+                    }, browser_created_here
                 
                 if flight_filter == "direct":
                     # Находим чекбокс "Прямой рейс"
@@ -251,7 +268,7 @@ async def search_flights(
                                 f"Текущее количество пассажиров: {adults_count} взр., {children_count} дет.",
                                 "Попробуйте другой класс обслуживания"
                             ]
-                        }
+                        }, browser_created_here
                     
                     # Включаем только рейсы с пересадками
                     connection_checkbox_label = connection_checkbox_labels[0]
@@ -308,12 +325,12 @@ async def search_flights(
                             f"Текущее количество пассажиров: {adults_count} взр., {children_count} дет.",
                             "Попробуйте другой класс обслуживания"
                         ]
-                    }
+                    }, browser_created_here
                 
                 # Если мы дошли сюда, то нет ни результатов, ни сообщения об отсутствии рейсов
                 if status_callback:
                     await status_callback("⚠️ не найдены направления рейсов, но страница загружена")
-                return {"error": "No directions found"}
+                return {"error": "No directions found"}, browser_created_here
             
             # Обработка найденных направлений
             for idx, frame in enumerate(direction_frames):
@@ -360,19 +377,102 @@ async def search_flights(
             if status_callback:
                 await status_callback("✅ обработка результатов завершена")
             
-            return results
+            return results, browser_created_here
             
         except Exception as e:
             if status_callback:
                 await status_callback(f"❌ произошла ошибка при обработке результатов: {str(e)}")
-            return {"error": f"Results processing error: {str(e)}"}
+            return {"error": f"Results processing error: {str(e)}"}, browser_created_here
 
     except Exception as e:
         if status_callback:
             await status_callback(f"❌ произошла ошибка при поиске: {str(e)}")
+        return {"error": str(e)}, browser_created_here
+    finally:
+        # Закрываем браузер только если мы его создали в этой функции
+        if browser_created_here and driver:
+            driver.quit()
+
+
+async def search_roundtrip(
+    from_city, 
+    to_city, 
+    depart_date, 
+    return_date,  # Обязательный параметр для этой функции
+    adults_count=1,
+    children_count=0,
+    class_type="economy", 
+    flight_filter="all",
+    status_callback=None
+):
+    """
+    Выполняет поиск билетов туда и обратно в одной сессии браузера
+    
+    Returns:
+        dict: результаты поиска для обоих направлений
+    """
+    combined_results = {"there": [], "back": []}
+    driver = None
+    wait = None
+    
+    try:
+        # 1. Создаем браузер
+        driver, wait = await create_browser()
+        
+        # 2. Выполняем поиск туда
+        if status_callback:
+            await status_callback("🔎 Выполняю поиск рейсов ТУДА...")
+        
+        there_results, _ = await search_flights(
+            from_city=from_city,
+            to_city=to_city,
+            depart_date=depart_date,
+            adults_count=adults_count,
+            children_count=children_count,
+            class_type=class_type,
+            flight_filter=flight_filter,
+            status_callback=status_callback,
+            driver=driver,
+            wait=wait
+        )
+        
+        # Проверяем, есть ли ошибка в результатах поиска туда
+        if "error" in there_results:
+            return there_results  # Возвращаем ошибку, если поиск туда не удался
+        
+        combined_results["there"] = there_results.get("there", [])
+        
+        # 3. Выполняем поиск обратно
+        if status_callback:
+            await status_callback("🔎 Выполняю поиск рейсов ОБРАТНО...")
+        
+        back_results, _ = await search_flights(
+            from_city=to_city,  # Меняем города местами
+            to_city=from_city,
+            depart_date=return_date,
+            adults_count=adults_count,
+            children_count=children_count,
+            class_type=class_type,
+            flight_filter=flight_filter,
+            status_callback=status_callback,
+            driver=driver,
+            wait=wait
+        )
+        
+        if "error" not in back_results:
+            combined_results["back"] = back_results.get("there", [])
+        
+        return combined_results
+    
+    except Exception as e:
+        if status_callback:
+            await status_callback(f"❌ Произошла ошибка при выполнении поиска: {str(e)}")
         return {"error": str(e)}
     finally:
-        driver.quit()
+        # Закрываем браузер
+        if driver:
+            driver.quit()
+
 
 def extract_flight_data(card, card_idx, driver, wait):
     """
